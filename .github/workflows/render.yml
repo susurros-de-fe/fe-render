@@ -1,0 +1,35 @@
+name: FE render
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "ID del video (carpeta jobs/<id>)"
+        required: true
+permissions:
+  contents: write
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      JOB_ID: ${{ inputs.job_id }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar ffmpeg, fuentes y numpy
+        run: sudo apt-get update -y && sudo apt-get install -y ffmpeg fonts-dejavu-core python3-numpy
+      - name: Renderizar video
+        run: |
+          python3 render_fe.py "jobs/${JOB_ID}/job.json" "video-${JOB_ID}.mp4"
+      - name: Publicar video en Release
+        run: gh release create "v-${JOB_ID}" "video-${JOB_ID}.mp4" --title "video-${JOB_ID}" --notes "FE"
+      - name: Limpiar paquete del repositorio
+        run: |
+          git config user.name "fe-bot"
+          git config user.email "fe-bot@users.noreply.github.com"
+          git rm -r -q "jobs/${JOB_ID}"
+          git commit -m "limpiar jobs/${JOB_ID}"
+          for i in 1 2 3 4 5 6; do
+            if git pull --rebase -q origin main && git push -q; then break; fi
+            sleep $((RANDOM % 8 + 3))
+          done
