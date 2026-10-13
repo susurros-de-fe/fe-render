@@ -1,0 +1,35 @@
+name: FE render tarjeta
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "ID de la tarjeta (carpeta jobs/<id>)"
+        required: true
+permissions:
+  contents: write
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      JOB_ID: ${{ inputs.job_id }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar Pillow y fuentes
+        run: sudo apt-get update -y && sudo apt-get install -y python3-pil fonts-dejavu-core
+      - name: Renderizar tarjeta
+        run: |
+          python3 render_tarjeta.py "jobs/${JOB_ID}/job.json" "tarjeta-${JOB_ID}.jpg"
+      - name: Publicar tarjeta en Release
+        run: gh release create "v-${JOB_ID}" "tarjeta-${JOB_ID}.jpg" --title "tarjeta-${JOB_ID}" --notes "FE tarjeta"
+      - name: Limpiar paquete del repositorio
+        run: |
+          git config user.name "fe-bot"
+          git config user.email "fe-bot@users.noreply.github.com"
+          git rm -r -q "jobs/${JOB_ID}"
+          git commit -m "limpiar jobs/${JOB_ID}"
+          for i in 1 2 3 4 5 6; do
+            if git pull --rebase -q origin main && git push -q; then break; fi
+            sleep $((RANDOM % 8 + 3))
+          done
