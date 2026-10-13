@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import wave
+import zlib
 
 import numpy as np
 
@@ -86,7 +87,7 @@ def peso(t):
     return len(t) + 4 * sum(t.count(c) for c in ',;:') + 8 * sum(t.count(c) for c in '.!?')
 
 
-def leer_voz(b64, work, i, velocidad):
+def leer_voz(b64, work, i, velocidad, calida=False):
     raw = '%s/v%02d.mp3' % (work, i)
     with open(raw, 'wb') as f:
         f.write(base64.b64decode(b64))
@@ -94,9 +95,50 @@ def leer_voz(b64, work, i, velocidad):
               'areverse,silenceremove=start_periods=1:start_duration=0:start_threshold=-48dB,areverse')
     if abs(velocidad - 1.0) > 0.01:
         filtro += ',atempo=%.3f' % velocidad
+    if calida:
+        filtro += ',highpass=f=75,bass=g=2.5:f=220,treble=g=-3.5:f=6500'
     datos = subprocess.check_output(['ffmpeg', '-v', 'error', '-i', raw, '-af', filtro,
                                      '-f', 's16le', '-ar', str(SR), '-ac', '1', '-'])
     return np.frombuffer(datos, dtype='<i2').astype(np.float32) / 32768.0
+
+
+def respiracion(rng, dur=0.30, nivel=0.02):
+    """Inhalacion suave (ruido filtrado) para que la voz suene a persona."""
+    n = int(dur * SR)
+    ruido = rng.standard_normal(n).astype(np.float32)
+    spec = np.fft.rfft(ruido)
+    f = np.fft.rfftfreq(n, 1.0 / SR)
+    masc = np.clip((f - 600.0) / 400.0, 0, 1) * np.clip((4800.0 - f) / 1200.0, 0, 1)
+    b = np.fft.irfft(spec * masc.astype(np.float32), n).astype(np.float32)
+    b /= max(float(np.max(np.abs(b))), 1e-6)
+    t = np.linspace(0.0, 1.0, n, dtype=np.float32)
+    env = np.sin(np.pi * np.power(t, 0.7)) ** 2
+    return b * env * nivel
+
+
+def habitacion(x, rng, humedo=0.17):
+    """Reverberacion corta y calida de cuarto pequeno, como orar en voz baja en privado."""
+    n = int(0.6 * SR)
+    t = np.arange(n, dtype=np.float32) / SR
+    ir = rng.standard_normal(n).astype(np.float32) * np.exp(-t / 0.085)
+    ir[: int(0.012 * SR)] = 0.0
+    spec = np.fft.rfft(ir)
+    f = np.fft.rfftfreq(n, 1.0 / SR)
+    spec *= np.clip((5200.0 - f) / 2500.0, 0, 1).astype(np.float32)
+    ir = np.fft.irfft(spec, n).astype(np.float32)
+    ir /= math.sqrt(float(np.sum(ir * ir)) + 1e-9)
+    m = len(x) + n
+    L = 1 << (m - 1).bit_length()
+    humedo_x = np.fft.irfft(np.fft.rfft(x, L) * np.fft.rfft(ir, L), L)[: len(x)].astype(np.float32)
+    return (0.92 * x + humedo * humedo_x).astype(np.float32)
+
+
+def suavizar_bordes(v):
+    n_in, n_out = int(0.02 * SR), int(0.09 * SR)
+    if len(v) > n_in + n_out:
+        v[:n_in] *= np.linspace(0.0, 1.0, n_in, dtype=np.float32)
+        v[-n_out:] *= np.linspace(1.0, 0.0, n_out, dtype=np.float32)
+    return v
 
 
 def escribir_ass(path, eventos, gancho, gancho_hasta):
@@ -147,20 +189,36 @@ def main():
     velocidad = float(job.get('velocidad', 1.0))
 
     # 1) linea de tiempo de la voz con pausas
+    humanizar = bool(job.get('humanizar', job.get('tipo') in ('oracion', 'salmo')))
+    rng = np.random.default_rng(zlib.crc32(str(job.get('job_id', 'fe')).encode()))
     partes = [np.zeros(int(LEAD * SR), dtype=np.float32)]
     t = LEAD
     tiempos = []
+    pausa_prev = LEAD
     for i, e in enumerate(escenas):
-        v = leer_voz(e['audio_b64'], work, i, velocidad)
+        v = leer_voz(e['audio_b64'], work, i, velocidad, calida=humanizar)
+        if humanizar:
+            v = suavizar_bordes(v)
+            if not e.get('cierre') and pausa_prev >= 0.8:
+                b = respiracion(rng)
+                z = partes[-1]
+                nb, gap = len(b), int(0.07 * SR)
+                if len(z) > nb + gap:
+                    z[len(z) - nb - gap: len(z) - gap] += b
         dur = len(v) / float(SR)
         pausa = float(e.get('pausa', 1.0))
+        if humanizar and not e.get('cierre'):
+            pausa *= float(rng.uniform(0.88, 1.22))
         tiempos.append((t, t + dur))
         partes.append(v)
         partes.append(np.zeros(int(pausa * SR), dtype=np.float32))
         t += dur + pausa
+        pausa_prev = pausa
     partes.append(np.zeros(int(TAIL * SR), dtype=np.float32))
     total = t + TAIL
     voz = np.concatenate(partes)
+    if humanizar:
+        voz = habitacion(voz, rng)
     escribir_wav('%s/voz_cruda.wav' % work, voz)
     run(['ffmpeg', '-y', '-loglevel', 'error', '-i', '%s/voz_cruda.wav' % work, '-af',
          'loudnorm=I=-16:TP=-1.5:LRA=7,aresample=44100', '%s/voz_f.wav' % work])
