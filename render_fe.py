@@ -20,6 +20,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import subs_pro as S  # noqa: E402
+S.set_paleta('fe')  # recuadro dorado suave (paz) en vez de rojo
 
 W, H, FPS, SR = 1080, 1920, 30, 44100
 NL = chr(10)
