@@ -18,6 +18,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Instalar Pillow y fuentes
         run: sudo apt-get update -y && sudo apt-get install -y python3-pil fonts-dejavu-core fonts-inter
+      - name: Descargar fuente Lora
+        run: |
+          mkdir -p "$HOME/.fonts"
+          curl -fsSL "https://raw.githubusercontent.com/google/fonts/main/ofl/lora/Lora%5Bwght%5D.ttf" -o "$HOME/.fonts/Lora[wght].ttf" || true
+          curl -fsSL "https://raw.githubusercontent.com/google/fonts/main/ofl/lora/Lora-Italic%5Bwght%5D.ttf" -o "$HOME/.fonts/Lora-Italic[wght].ttf" || true
+          fc-cache -f || true
       - name: Renderizar tarjeta
         run: |
           python3 render_tarjeta.py "jobs/${JOB_ID}/job.json" "tarjeta-${JOB_ID}.jpg"
