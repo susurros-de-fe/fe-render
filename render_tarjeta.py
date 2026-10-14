@@ -476,12 +476,203 @@ def render_variado(job, out_path, texto, ref, cifra, etiqueta, tipo, marca, rng)
     img.convert('RGB').save(out_path, 'JPEG', quality=93, optimize=True)
     print('Tarjeta lista:', out_path)
 
+# =====================================================================
+# Diseno "pro" de Susurros de Fe: fondo de luz dibujado (sin IA), serif elegante, marco fino y adorno de cruz
+# =====================================================================
+_SERIF = {}
+
+def fuente_serif(tam, peso='Medium', cursiva=False):
+    clave = (tam, peso, cursiva)
+    if clave in _SERIF:
+        return _SERIF[clave]
+    nombres = (['Lora-Italic*.ttf', 'Lora-Italic-Variable.ttf'] if cursiva else ['Lora[[]wght[]].ttf', 'Lora-Variable.ttf', 'Lora-Regular.ttf'])
+    ruta = None
+    for n in nombres:
+        for base in ('/usr/share/fonts/**/', '/usr/local/share/fonts/**/', os.path.expanduser('~/.fonts/**/')):
+            hall = glob.glob(base + n, recursive=True)
+            if hall:
+                ruta = hall[0]
+                break
+        if ruta:
+            break
+    if not ruta:
+        ruta = SERIF_I if cursiva else SERIF_B
+    f = ImageFont.truetype(ruta, tam)
+    try:
+        f.set_variation_by_name(peso)
+    except Exception:
+        pass
+    _SERIF[clave] = f
+    return f
+
+PALETAS_FE = {
+    'amanecer': ((34, 38, 88), (156, 96, 124), (246, 176, 112), (255, 220, 150), (0.5, 0.74)),
+    'atardecer': ((48, 28, 78), (170, 66, 92), (250, 146, 78), (255, 196, 120), (0.5, 0.78)),
+    'noche': ((8, 14, 38), (22, 48, 92), (54, 104, 142), (196, 220, 255), (0.72, 0.2)),
+    'cielo': ((28, 66, 138), (92, 152, 214), (226, 232, 240), (255, 255, 255), (0.5, 0.8)),
+}
+
+def degradado3(c1, c2, c3):
+    base = Image.new('RGB', (1, H))
+    px = base.load()
+    for y in range(H):
+        t = y / (H - 1)
+        if t < 0.55:
+            u = t / 0.55
+            a, b = c1, c2
+        else:
+            u = (t - 0.55) / 0.45
+            a, b = c2, c3
+        u = u * u * (3 - 2 * u)
+        px[0, y] = tuple(int(a[i] + (b[i] - a[i]) * u) for i in range(3))
+    return base.resize((W, H))
+
+def fondo_luz(nombre, rng):
+    c1, c2, c3, glow, (gx, gy) = PALETAS_FE.get(nombre, PALETAS_FE['amanecer'])
+    img = degradado3(c1, c2, c3).convert('RGBA')
+    cx, cy = int(W * gx), int(H * gy)
+    # rayos de luz
+    rayos = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    dr = ImageDraw.Draw(rayos)
+    n = 9
+    for k in range(n):
+        ang = math.radians(-90 + (k - (n - 1) / 2) * 17 + rng.uniform(-4, 4))
+        ancho = math.radians(rng.uniform(2.5, 6))
+        largo = 1900
+        p = [(cx, cy),
+             (cx + largo * math.cos(ang - ancho), cy + largo * math.sin(ang - ancho)),
+             (cx + largo * math.cos(ang + ancho), cy + largo * math.sin(ang + ancho))]
+        dr.polygon(p, fill=glow + (rng.randint(16, 30),))
+    rayos = rayos.filter(ImageFilter.GaussianBlur(26))
+    img = Image.alpha_composite(img, rayos)
+    # resplandor
+    for r, a in ((620, 70), (330, 90), (150, 120)):
+        capa = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+        ImageDraw.Draw(capa).ellipse((cx - r, cy - r, cx + r, cy + r), fill=glow + (a,))
+        img = Image.alpha_composite(img, capa.filter(ImageFilter.GaussianBlur(r * 0.55)))
+    # nubes suaves
+    nubes = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    dn = ImageDraw.Draw(nubes)
+    for _ in range(9):
+        w_ = rng.randint(420, 900)
+        h_ = rng.randint(50, 120)
+        x_ = rng.randint(-200, W - 200)
+        y_ = rng.choice([rng.randint(60, 380), rng.randint(900, 1250)])
+        dn.ellipse((x_, y_, x_ + w_, y_ + h_), fill=(255, 255, 255, rng.randint(22, 44)))
+    img = Image.alpha_composite(img, nubes.filter(ImageFilter.GaussianBlur(48)))
+    # particulas de luz
+    polvo = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    dp = ImageDraw.Draw(polvo)
+    for _ in range(40):
+        r = rng.choice([3, 4, 5, 6, 8, 10])
+        x_ = int(cx + rng.gauss(0, W * 0.34))
+        y_ = int(cy + rng.gauss(-H * 0.18, H * 0.30))
+        dp.ellipse((x_ - r, y_ - r, x_ + r, y_ + r), fill=glow + (rng.randint(30, 100),))
+    img = Image.alpha_composite(img, polvo.filter(ImageFilter.GaussianBlur(1.6)))
+    img = img.convert('RGB')
+    # oscurecer bordes y centro leve para que el texto se lea
+    sombra = Image.new('RGB', (W, H), (4, 6, 18))
+    vig = Image.new('L', (W, H), 0)
+    ImageDraw.Draw(vig).ellipse((-W * 0.15, -H * 0.05, W * 1.15, H * 1.05), fill=255)
+    vig = vig.filter(ImageFilter.GaussianBlur(190))
+    img = Image.composite(img, Image.blend(img, sombra, 0.62), vig)
+    img = Image.blend(img, Image.new('RGB', (W, H), (6, 8, 22)), 0.22)
+    return grano(img, 0.03)
+
+def cruz(draw, cx, cy, alto, color, grosor):
+    r = grosor // 2
+    draw.rounded_rectangle((cx - r, cy - alto // 2, cx + r, cy + alto // 2), radius=r, fill=color)
+    ancho = int(alto * 0.62)
+    yb = cy - alto // 2 + int(alto * 0.30)
+    draw.rounded_rectangle((cx - ancho // 2, yb - r, cx + ancho // 2, yb + r), radius=r, fill=color)
+
+def adorno(draw, cx, cy, color, largo=110):
+    draw.line((cx - largo - 14, cy, cx - 14, cy), fill=color, width=2)
+    draw.line((cx + 14, cy, cx + largo + 14, cy), fill=color, width=2)
+    draw.polygon([(cx, cy - 7), (cx + 7, cy), (cx, cy + 7), (cx - 7, cy)], fill=color)
+
+def ajustar_serif(draw, texto, peso, cursiva, tam_max, tam_min, ancho, alto_max, max_lin, inter=1.36):
+    tam = tam_max
+    while tam >= tam_min:
+        f = fuente_serif(tam, peso, cursiva)
+        lin = envolver(draw, texto, f, ancho)
+        if len(lin) <= max_lin and len(lin) * int(tam * inter) <= alto_max and max(draw.textlength(l, font=f) for l in lin) <= ancho:
+            return f, lin, int(tam * inter)
+        tam -= 2
+    f = fuente_serif(tam_min, peso, cursiva)
+    return f, envolver(draw, texto, f, ancho), int(tam_min * inter)
+
+def render_fe_pro(job, out_path):
+    texto = ' '.join(str(job['texto']).split())
+    ref = ' '.join(str(job.get('referencia', '') or '').split())
+    tipo = job.get('tipo', 'frase')
+    marca = str(job.get('marca', 'Susurros de Fe'))
+    etiqueta = ' '.join(str(job.get('etiqueta', '') or '').split()).upper()
+    semilla = str(job.get('job_id', texto))
+    rng = random.Random(sum(ord(c) * (i + 1) for i, c in enumerate(semilla)))
+    nombre = str(job.get('fondo', '') or '')
+    if nombre not in PALETAS_FE:
+        nombre = sorted(PALETAS_FE)[sum(ord(c) for c in semilla) % len(PALETAS_FE)]
+    img = fondo_luz(nombre, rng)
+    draw = ImageDraw.Draw(img, 'RGBA')
+    dorado = (255, 214, 140)
+    claro = (255, 249, 238)
+
+    # marco fino
+    draw.rounded_rectangle((46, 46, W - 46, H - 46), radius=30, outline=dorado + (95,), width=2)
+    draw.rounded_rectangle((62, 62, W - 62, H - 62), radius=22, outline=dorado + (38,), width=1)
+
+    # encabezado: cruz y rotulo
+    cruz(draw, W // 2, 150, 74, dorado, 9)
+    draw.line((W // 2 - 190, 150, W // 2 - 60, 150), fill=dorado + (120,), width=2)
+    draw.line((W // 2 + 60, 150, W // 2 + 190, 150), fill=dorado + (120,), width=2)
+    rotulo = etiqueta or {'versiculo': 'VERSÍCULO DEL DÍA', 'pregunta': 'PARA REFLEXIONAR'}.get(tipo, 'PARA TU CORAZÓN HOY')
+    texto_espaciado(draw, (W // 2, 232), rotulo, fuente('sb', 31), dorado, sp=7, anchor='m')
+
+    # texto principal
+    ancho = 820
+    cursiva = tipo == 'pregunta'
+    alto_disp = 520 if ref else 600
+    f, lin, paso = ajustar_serif(draw, texto, 'Medium', cursiva, 78, 40, ancho, alto_disp, 10)
+    comillas = tipo in ('versiculo', 'frase')
+    alto_txt = len(lin) * paso
+    alto_ref = 120 if ref else 0
+    zona_ini, zona_fin = (400 if comillas else 340), 1090
+    y0 = zona_ini + max(0, (zona_fin - zona_ini - alto_txt - alto_ref) // 2)
+    if comillas:
+        draw.text((W // 2, y0 - 38), '“', font=fuente_serif(200, 'Bold'), fill=dorado + (120,), anchor='mm')
+        y0 += 28
+    y = y0
+    for ln in lin:
+        draw.text((W // 2 + 2, y + 3), ln, font=f, fill=(0, 0, 0, 120), anchor='ma')
+        draw.text((W // 2, y), ln, font=f, fill=claro, anchor='ma')
+        y += paso
+    y += 34
+    if ref:
+        adorno(draw, W // 2, y + 8, dorado + (190,))
+        y += 44
+        fr = fuente('sb', 33)
+        refm = ref.upper().replace(' (', '  ·  ').replace(')', '')
+        lr = envolver(draw, refm, fr, 860)
+        for ln in lr[:2]:
+            texto_espaciado(draw, (W // 2, y), ln, fr, dorado, sp=5, anchor='m')
+            y += 46
+
+    # pie
+    draw.line((W // 2 - 50, H - 196, W // 2 + 50, H - 196), fill=dorado + (150,), width=2)
+    texto_espaciado(draw, (W // 2, H - 168), marca.upper(), fuente('sb', 30), claro + (235,), sp=8, anchor='m')
+    texto_espaciado(draw, (W // 2, H - 118), 'GUÁRDALO  ·  COMPÁRTELO', fuente('m', 23), claro + (150,), sp=6, anchor='m')
+    img.convert('RGB').save(out_path, 'JPEG', quality=93, optimize=True)
+    print('Tarjeta lista:', out_path)
+
 def main():
     job_path, out_path = sys.argv[1], sys.argv[2]
     with open(job_path, encoding='utf-8') as f:
         job = json.load(f)
-    if job.get('imagen_b64') or str(job.get('paleta', 'fe')) == 'fe':
+    if job.get('imagen_b64'):
         render_clasico(job, out_path)
+    elif str(job.get('paleta', 'fe')) == 'fe':
+        render_fe_pro(job, out_path)
     else:
         render_pro(job, out_path)
 
