@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
-"""FE render (pagina cristiana): voz de mujer con pausas largas, fondo relajante, subtitulos suaves,
-imagenes con zoom lento y fundidos. Cierre fijo "Comparte esto con alguien especial para ti".
-Uso: python3 render_fe.py jobs/<id>/job.json salida.mp4
-
-job.json:
-  job_id, titulo, tipo ('oracion'|'historia'), velocidad (1.0), fondo ('relajante'|'ninguno'),
-  texto_gancho (opcional, titulo en pantalla los primeros segundos),
-  imagenes: [b64, ...]
-  escenas: [{texto, audio_b64, pausa (segundos de silencio despues), img (indice en imagenes), cierre (bool)}]
-Escenas consecutivas con el mismo `img` forman una sola toma con un zoom continuo.
-"""
-import array
+# FE render (pagina cristiana): voz de mujer con pausas, fondo relajante, subtitulos modernos,
+# imagenes con zoom lento y fundidos.  Uso: python3 render_fe.py jobs/<id>/job.json salida.mp4
+# job.json: job_id, titulo, tipo (oracion|historia|salmo), velocidad, fondo (relajante|ninguno),
+#   texto_gancho (titulo en pantalla al inicio), imagenes: [b64], escenas: [{texto, audio_b64,
+#   pausa, img, cierre}].  Escenas seguidas con el mismo img forman una toma con zoom continuo.
+# audio_v >= 2 (opcional): cuida las pausas (recorta silencios internos largos de la voz, iguala el
+#   volumen entre frases y varia un poco las pausas entre frases, como una persona).
+# Subtitulos: modulo compartido subs_pro.py (mismo estilo moderno que Dinero con Historia y Variado).
 import base64
 import json
 import math
@@ -22,8 +18,12 @@ import zlib
 
 import numpy as np
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import subs_pro as S  # noqa: E402
+
 W, H, FPS, SR = 1080, 1920, 30, 44100
 NL = chr(10)
+BS = chr(92)
 LEAD = 0.5      # silencio inicial
 TAIL = 2.2      # silencio final (el fondo se desvanece)
 FADE = 0.7      # fundido de cada toma
@@ -38,53 +38,6 @@ def duration(path):
     out = subprocess.check_output(['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
                                    '-of', 'csv=p=0', path])
     return float(out.decode().strip())
-
-
-def ass_time(t):
-    t = max(t, 0.0)
-    h = int(t // 3600)
-    m = int((t % 3600) // 60)
-    s = t % 60
-    return '%d:%02d:%05.2f' % (h, m, s)
-
-
-def limpiar(t):
-    return ' '.join(str(t).replace('{', '(').replace('}', ')').replace(chr(92), ' ').split())
-
-
-def envolver(texto, ancho):
-    lineas, cur = [], ''
-    for p in texto.split():
-        prueba = (cur + ' ' + p).strip()
-        if cur and len(prueba) > ancho:
-            lineas.append(cur)
-            cur = p
-        else:
-            cur = prueba
-    if cur:
-        lineas.append(cur)
-    return lineas
-
-
-def trozos(texto, max_words=5, max_chars=26):
-    out, cur = [], []
-    for w in texto.split():
-        prueba = ' '.join(cur + [w])
-        if cur and (len(cur) >= max_words or len(prueba) > max_chars):
-            out.append(' '.join(cur))
-            cur = [w]
-        else:
-            cur.append(w)
-        if w[-1:] in '.!?;:' and cur:
-            out.append(' '.join(cur))
-            cur = []
-    if cur:
-        out.append(' '.join(cur))
-    return out
-
-
-def peso(t):
-    return len(t) + 4 * sum(t.count(c) for c in ',;:') + 8 * sum(t.count(c) for c in '.!?')
 
 
 def leer_voz(b64, work, i, velocidad, calida=False):
@@ -102,8 +55,79 @@ def leer_voz(b64, work, i, velocidad, calida=False):
     return np.frombuffer(datos, dtype='<i2').astype(np.float32) / 32768.0
 
 
+def _db_frames(x, hop=441):
+    n = len(x) // hop
+    if n == 0:
+        return np.zeros(0, dtype=np.float32)
+    fr = x[: n * hop].reshape(n, hop)
+    rms = np.sqrt(np.mean(fr * fr, axis=1) + 1e-12)
+    return 20.0 * np.log10(rms + 1e-9)
+
+
+def reparar_pausas(x, max_sil=0.38, hop=441):
+    # Recorta silencios internos largos que la voz sintetica mete donde una persona no pararia.
+    # Devuelve (audio, lista de (segundo, duracion_antes, duracion_despues)).
+    db = _db_frames(x, hop)
+    if len(db) < 20:
+        return x, []
+    nivel = float(np.percentile(db, 92))
+    umbral = max(nivel - 30.0, -58.0)
+    silencio = db < umbral
+    cortes = []
+    i = 0
+    n = len(db)
+    while i < n:
+        if silencio[i]:
+            j = i
+            while j < n and silencio[j]:
+                j += 1
+            dur = (j - i) * hop / float(SR)
+            if i > 3 and j < n - 3 and dur > max_sil:
+                cortes.append((i, j))
+            i = j
+        else:
+            i += 1
+    if not cortes:
+        return x, []
+    partes, pos, info = [], 0, []
+    xf = int(0.012 * SR)
+    for (i, j) in cortes:
+        a, b = i * hop, j * hop
+        quedan = int(max_sil * SR)
+        mitad = quedan // 2
+        izq_fin = a + mitad
+        der_ini = b - (quedan - mitad)
+        tramo = x[pos:izq_fin].copy()
+        partes.append(tramo)
+        pos = der_ini
+        info.append((a / float(SR), (b - a) / float(SR), quedan / float(SR)))
+    partes.append(x[pos:].copy())
+    out = partes[0]
+    for p in partes[1:]:
+        if len(out) > xf and len(p) > xf:
+            r = np.linspace(0.0, 1.0, xf, dtype=np.float32)
+            mezcla = out[-xf:] * (1.0 - r) + p[:xf] * r
+            out = np.concatenate([out[:-xf], mezcla, p[xf:]])
+        else:
+            out = np.concatenate([out, p])
+    return out.astype(np.float32), info
+
+
+def igualar_volumen(x, objetivo_db=-21.0):
+    db = _db_frames(x)
+    if len(db) < 5:
+        return x
+    activos = db[db > (float(np.percentile(db, 92)) - 25.0)]
+    if len(activos) == 0:
+        return x
+    # nivel medio de la parte hablada
+    actual = float(np.mean(activos))
+    g = max(-6.0, min(6.0, objetivo_db - actual))
+    return (x * (10.0 ** (g / 20.0))).astype(np.float32)
+
+
 def respiracion(rng, dur=0.30, nivel=0.02):
-    """Inhalacion suave (ruido filtrado) para que la voz suene a persona."""
+    # Inhalacion suave (ruido filtrado) para que la voz suene a persona.
     n = int(dur * SR)
     ruido = rng.standard_normal(n).astype(np.float32)
     spec = np.fft.rfft(ruido)
@@ -117,7 +141,7 @@ def respiracion(rng, dur=0.30, nivel=0.02):
 
 
 def habitacion(x, rng, humedo=0.17):
-    """Reverberacion corta y calida de cuarto pequeno, como orar en voz baja en privado."""
+    # Reverberacion corta y calida de cuarto pequeno, como orar en voz baja en privado.
     n = int(0.6 * SR)
     t = np.arange(n, dtype=np.float32) / SR
     ir = rng.standard_normal(n).astype(np.float32) * np.exp(-t / 0.085)
@@ -141,32 +165,18 @@ def suavizar_bordes(v):
     return v
 
 
-def escribir_ass(path, eventos, gancho, gancho_hasta):
-    cab = NL.join([
-        '[Script Info]', 'ScriptType: v4.00+', 'PlayResX: %d' % W, 'PlayResY: %d' % H, '',
-        '[V4+ Styles]',
-        'Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,'
-        'Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,'
-        'Alignment,MarginL,MarginR,MarginV,Encoding',
-        'Style: Default,DejaVu Sans,66,&H00FFFFFF,&H000000FF,&H00000000,&H78000000,'
-        '1,0,0,0,100,100,1,0,1,5,2,2,70,70,480,1',
-        'Style: Cierre,DejaVu Sans,74,&H0037C8FF,&H000000FF,&H00000000,&H78000000,'
-        '1,0,0,0,100,100,1,0,1,6,2,2,70,70,520,1',
-        'Style: Titulo,DejaVu Sans,70,&H00DDF0FF,&H000000FF,&H00000000,&H96000000,'
-        '1,0,0,0,100,100,2,0,1,6,3,8,80,80,300,1',
-        '', '[Events]',
-        'Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text', '',
-    ])
+def escribir_ass(path, escenas, tiempos, gancho, gancho_hasta):
     lineas = []
-    for ini, fin, estilo, txt in eventos:
-        lineas.append('Dialogue: 0,%s,%s,%s,,0,0,0,,{\\fad(250,250)}%s' % (
-            ass_time(ini), ass_time(fin), estilo, txt))
+    for i, e in enumerate(escenas):
+        ini, fin = tiempos[i]
+        estilo = 'Cierre' if e.get('cierre') else 'Default'
+        lineas += S.dialogos(e.get('texto', ''), ini, fin, estilo, 3, 22)
     if gancho and gancho_hasta > 0.5:
-        t = '\\N'.join(envolver(limpiar(gancho), 22))
-        lineas.append('Dialogue: 1,%s,%s,Titulo,,0,0,0,,{\\fad(500,600)}%s' % (
-            ass_time(0.3), ass_time(gancho_hasta), t))
+        t = (BS + 'N').join(S.envolver(S.limpiar(gancho), 20))
+        lineas.append(('Dialogue: 1,%s,%s,Titulo,,0,0,0,,{' + BS + 'fad(450,550)}%s') % (
+            S.ass_time(0.3), S.ass_time(gancho_hasta), t))
     with open(path, 'w', encoding='utf-8') as f:
-        f.write(cab + NL.join(lineas) + NL)
+        f.write(S.cabecera(W, H) + NL.join(lineas) + NL)
 
 
 def escribir_wav(path, x):
@@ -190,13 +200,25 @@ def main():
 
     # 1) linea de tiempo de la voz con pausas
     humanizar = bool(job.get('humanizar', False))  # sonido limpio por defecto (decision de Ferlyn 14 oct)
+    audio_v = int(job.get('audio_v', 0) or 0)
     rng = np.random.default_rng(zlib.crc32(str(job.get('job_id', 'fe')).encode()))
     partes = [np.zeros(int(LEAD * SR), dtype=np.float32)]
     t = LEAD
     tiempos = []
     pausa_prev = LEAD
+    informe = []
     for i, e in enumerate(escenas):
         v = leer_voz(e['audio_b64'], work, i, velocidad, calida=humanizar)
+        if audio_v >= 2:
+            v, cortes = reparar_pausas(v)
+            for (seg, antes, despues) in cortes:
+                informe.append('frase %d: silencio interno de %.2f s recortado a %.2f s (en %.1f s)' % (
+                    i + 1, antes, despues, seg))
+            v = igualar_volumen(v)
+            n_in = int(0.008 * SR)
+            if len(v) > 2 * n_in:
+                v[:n_in] *= np.linspace(0.0, 1.0, n_in, dtype=np.float32)
+                v[-n_in:] *= np.linspace(1.0, 0.0, n_in, dtype=np.float32)
         if humanizar:
             v = suavizar_bordes(v)
             if not e.get('cierre') and pausa_prev >= 0.8:
@@ -209,11 +231,22 @@ def main():
         pausa = float(e.get('pausa', 1.0))
         if humanizar and not e.get('cierre'):
             pausa *= float(rng.uniform(0.88, 1.22))
+        if audio_v >= 2 and not e.get('cierre'):
+            # una persona no deja siempre el mismo silencio: varia un poco y respira mas tras frases largas
+            pausa *= float(rng.uniform(0.9, 1.18))
+            if len(str(e.get('texto', ''))) > 110:
+                pausa += 0.12
+            pausa = max(pausa, 0.14)
         tiempos.append((t, t + dur))
         partes.append(v)
         partes.append(np.zeros(int(pausa * SR), dtype=np.float32))
         t += dur + pausa
         pausa_prev = pausa
+        informe.append('frase %d: voz %.2f s + pausa %.2f s' % (i + 1, dur, pausa))
+    if audio_v >= 2:
+        print('INFORME DE PAUSAS (audio_v=%d)' % audio_v)
+        for linea in informe:
+            print('  ' + linea)
     partes.append(np.zeros(int(TAIL * SR), dtype=np.float32))
     total = t + TAIL
     voz = np.concatenate(partes)
@@ -265,26 +298,10 @@ def main():
     run(['ffmpeg', '-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', lst,
          '-c', 'copy', video])
 
-    # 3) subtitulos
-    eventos = []
-    for i, e in enumerate(escenas):
-        ini, fin = tiempos[i]
-        ps = trozos(limpiar(e.get('texto', '')))
-        if not ps:
-            continue
-        estilo = 'Cierre' if e.get('cierre') else 'Default'
-        if e.get('cierre'):
-            ps = ['\\N'.join(envolver(limpiar(e.get('texto', '')), 20))]
-        pesos = [max(peso(p), 1) for p in ps]
-        tw = float(sum(pesos))
-        c = ini
-        for p, w in zip(ps, pesos):
-            dd = (fin - ini) * w / tw
-            eventos.append((c, min(c + dd + 0.15, fin + 0.5), estilo, p))
-            c += dd
+    # 3) subtitulos modernos (modulo compartido)
     ass = '%s/subs.ass' % work
-    gancho = limpiar(job.get('texto_gancho', '') or '')
-    escribir_ass(ass, eventos, gancho, min(3.5, tiempos[0][0] + 3.0))
+    gancho = S.limpiar(job.get('texto_gancho', '') or '')
+    escribir_ass(ass, escenas, tiempos, gancho, min(3.5, tiempos[0][0] + 3.0))
 
     # 4) fondo relajante + mezcla final
     fondo = job.get('fondo', 'relajante')
