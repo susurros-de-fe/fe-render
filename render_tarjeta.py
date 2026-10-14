@@ -26,22 +26,6 @@ SANS = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
 SANS_B = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'
 GOLD = (255, 214, 120)
 
-# Paletas: (fondo arriba, fondo abajo, acento, acento 2)
-PALETAS = {
-    'dinero': [
-        ((6, 18, 40), (12, 46, 84), (255, 205, 90), (70, 200, 140)),
-        ((8, 24, 30), (10, 62, 66), (255, 205, 90), (120, 220, 200)),
-        ((18, 14, 36), (44, 30, 90), (255, 205, 90), (160, 140, 255)),
-    ],
-    'variado': [
-        ((22, 12, 56), (84, 24, 120), (255, 196, 61), (255, 107, 107)),
-        ((6, 40, 70), (0, 110, 130), (255, 220, 90), (255, 140, 90)),
-        ((60, 14, 40), (150, 40, 70), (255, 214, 120), (120, 220, 255)),
-        ((10, 50, 40), (18, 110, 90), (255, 224, 110), (255, 150, 120)),
-    ],
-}
-
-
 def cubrir(img, w, h):
     iw, ih = img.size
     k = max(w / iw, h / ih)
@@ -49,7 +33,6 @@ def cubrir(img, w, h):
     x = (img.size[0] - w) // 2
     y = (img.size[1] - h) // 2
     return img.crop((x, y, x + w, y + h))
-
 
 def envolver(draw, texto, fuente, ancho):
     lineas, cur = [], ''
@@ -64,7 +47,6 @@ def envolver(draw, texto, fuente, ancho):
         lineas.append(cur)
     return lineas
 
-
 def degradado(c1, c2):
     base = Image.new('RGB', (1, H))
     px = base.load()
@@ -73,7 +55,6 @@ def degradado(c1, c2):
         px[0, y] = tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
     return base.resize((W, H))
 
-
 def brillo(img, cx, cy, r, color, alfa):
     capa = Image.new('RGBA', (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(capa)
@@ -81,79 +62,10 @@ def brillo(img, cx, cy, r, color, alfa):
     capa = capa.filter(ImageFilter.GaussianBlur(r * 0.45))
     img.paste(capa, (0, 0), capa)
 
-
-def fondo_dinero(rng, pal):
-    c1, c2, ac, ac2 = pal
-    img = degradado(c1, c2)
-    brillo(img, rng.randint(250, 830), rng.randint(180, 420), 380, ac, 55)
-    capa = Image.new('RGBA', (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(capa)
-    # cuadricula fina tipo grafico
-    for x in range(0, W + 1, 90):
-        d.line((x, 0, x, H), fill=(255, 255, 255, 12), width=1)
-    for y in range(0, H + 1, 90):
-        d.line((0, y, W, y), fill=(255, 255, 255, 12), width=1)
-    # linea ascendente con ruido (grafico de crecimiento) en la parte baja
-    n = 14
-    puntos = []
-    y = rng.randint(1000, 1150)
-    for i in range(n + 1):
-        x = int(W * i / n)
-        y = max(560, min(1230, y - rng.randint(-40, 85)))
-        puntos.append((x, y))
-    area = puntos + [(W, H), (0, H)]
-    d.polygon(area, fill=ac2 + (22,))
-    d.line(puntos, fill=ac2 + (95,), width=5, joint='curve')
-    # velas sutiles
-    for i in range(n):
-        x, yy = puntos[i]
-        alto = rng.randint(30, 90)
-        d.rectangle((x - 9, yy - alto // 2, x + 9, yy + alto // 2), fill=ac + (28,))
-    # monedas
-    for _ in range(5):
-        cx, cy, r = rng.randint(80, 1000), rng.randint(60, 1290), rng.randint(40, 120)
-        d.ellipse((cx - r, cy - r, cx + r, cy + r), outline=ac + (60,), width=5)
-        d.ellipse((cx - r * .7, cy - r * .7, cx + r * .7, cy + r * .7), outline=ac + (38,), width=3)
-    capa = capa.filter(ImageFilter.GaussianBlur(1.2))
-    img.paste(capa, (0, 0), capa)
-    return img
-
-
-def fondo_variado(rng, pal):
-    c1, c2, ac, ac2 = pal
-    img = degradado(c1, c2)
-    brillo(img, rng.randint(150, 930), rng.randint(150, 500), 420, ac2, 60)
-    brillo(img, rng.randint(150, 930), rng.randint(850, 1250), 380, ac, 45)
-    capa = Image.new('RGBA', (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(capa)
-    # puntos
-    for gx in range(40, W, 70):
-        for gy in range(40, H, 70):
-            if rng.random() < 0.55:
-                d.ellipse((gx - 3, gy - 3, gx + 3, gy + 3), fill=(255, 255, 255, 26))
-    # formas geometricas
-    for _ in range(7):
-        cx, cy, r = rng.randint(0, W), rng.randint(0, H), rng.randint(60, 220)
-        col = rng.choice([ac, ac2, (255, 255, 255)])
-        forma = rng.choice(['c', 'a', 't'])
-        if forma == 'c':
-            d.ellipse((cx - r, cy - r, cx + r, cy + r), outline=col + (60,), width=rng.randint(4, 9))
-        elif forma == 'a':
-            d.arc((cx - r, cy - r, cx + r, cy + r), rng.randint(0, 180), rng.randint(200, 360), fill=col + (90,), width=10)
-        else:
-            a0 = rng.random() * math.tau
-            pts = [(cx + r * math.cos(a0 + k * math.tau / 3), cy + r * math.sin(a0 + k * math.tau / 3)) for k in range(3)]
-            d.polygon(pts, outline=col + (60,), width=6)
-    capa = capa.filter(ImageFilter.GaussianBlur(1.0))
-    img.paste(capa, (0, 0), capa)
-    return img
-
-
 def sombra_texto(draw, xy, txt, fuente, fill, anchor='ma', dx=3):
     x, y = xy
     draw.text((x + dx, y + dx), txt, font=fuente, fill=(0, 0, 0), anchor=anchor)
     draw.text((x, y), txt, font=fuente, fill=fill, anchor=anchor)
-
 
 def ajustar(draw, texto, ruta, tam_max, tam_min, ancho, alto_max, max_lineas, inter=1.32):
     tam = tam_max
@@ -167,11 +79,7 @@ def ajustar(draw, texto, ruta, tam_max, tam_min, ancho, alto_max, max_lineas, in
     fuente = ImageFont.truetype(ruta, tam_min)
     return fuente, envolver(draw, texto, fuente, ancho), int(tam_min * inter)
 
-
-def main():
-    job_path, out_path = sys.argv[1], sys.argv[2]
-    with open(job_path, encoding='utf-8') as f:
-        job = json.load(f)
+def render_clasico(job, out_path):
     texto = ' '.join(str(job['texto']).split())
     ref = ' '.join(str(job.get('referencia', '') or '').split())
     cifra = ' '.join(str(job.get('cifra', '') or '').split())
@@ -195,10 +103,7 @@ def main():
         vig = vig.filter(ImageFilter.GaussianBlur(160))
         img = Image.composite(img, Image.blend(img, oscuro, 0.35), vig)
     else:
-        lista = PALETAS.get(paleta, PALETAS['dinero'])
-        pal = lista[rng.randrange(len(lista))]
-        acento, acento2 = pal[2], pal[3]
-        img = fondo_dinero(rng, pal) if paleta == 'dinero' else fondo_variado(rng, pal)
+        img = degradado((10, 16, 34), (24, 40, 80))
         # oscurecer un poco el centro para legibilidad
         oscuro = Image.new('RGB', (W, H), (0, 0, 0))
         img = Image.blend(img, oscuro, 0.18)
@@ -285,6 +190,300 @@ def main():
     img.save(out_path, 'JPEG', quality=92, optimize=True)
     print('Tarjeta lista:', out_path)
 
+# =====================================================================
+# Diseno "pro" (Dinero con Historia y Variado): plantilla editorial limpia
+# =====================================================================
+import glob
+import os
+
+_FUENTES = {}
+
+def buscar_fuente(*nombres):
+    for n in nombres:
+        for patron in ('/usr/share/fonts/**/' + n, '/usr/local/share/fonts/**/' + n):
+            hall = glob.glob(patron, recursive=True)
+            if hall:
+                return hall[0]
+    return None
+
+def fuente(peso, tam):
+    """peso: 'xb' (extrabold), 'b' (bold), 'sb' (semibold), 'm' (medium). Usa Inter si esta instalada; si no, DejaVu."""
+    clave = (peso, tam)
+    if clave in _FUENTES:
+        return _FUENTES[clave]
+    mapa = {
+        'xb': ['Inter-ExtraBold.otf', 'Inter-ExtraBold.ttf', 'Inter-Bold.otf', 'Inter-Bold.ttf'],
+        'b': ['Inter-Bold.otf', 'Inter-Bold.ttf'],
+        'sb': ['Inter-SemiBold.otf', 'Inter-SemiBold.ttf', 'Inter-Bold.otf', 'Inter-Bold.ttf'],
+        'm': ['Inter-Medium.otf', 'Inter-Medium.ttf', 'Inter-Regular.otf', 'Inter-Regular.ttf'],
+    }
+    ruta = buscar_fuente(*mapa[peso])
+    if not ruta:
+        ruta = SANS_B if peso in ('xb', 'b', 'sb') else SANS
+    f = ImageFont.truetype(ruta, tam)
+    _FUENTES[clave] = f
+    return f
+
+def grano(img, fuerza=0.035):
+    ruido = Image.effect_noise((W, H), 70).convert('RGB')
+    return Image.blend(img, ruido, fuerza)
+
+def diagonal(c1, c2):
+    base = Image.new('RGB', (W, H))
+    px = base.load()
+    for y in range(H):
+        for x in range(0, W, 1):
+            t = (y * 0.8 + x * 0.35) / (H * 0.8 + W * 0.35)
+            px[x, y] = (int(c1[0] + (c2[0] - c1[0]) * t), int(c1[1] + (c2[1] - c1[1]) * t), int(c1[2] + (c2[2] - c1[2]) * t))
+    return base
+
+def texto_espaciado(draw, xy, txt, f, fill, sp=4, anchor='l'):
+    x, y = xy
+    total = sum(draw.textlength(c, font=f) + sp for c in txt) - sp
+    if anchor == 'r':
+        x -= total
+    elif anchor == 'm':
+        x -= total / 2
+    for c in txt:
+        draw.text((x, y), c, font=f, fill=fill)
+        x += draw.textlength(c, font=f) + sp
+    return total
+
+def ajustar_pro(draw, texto, peso, tam_max, tam_min, ancho, alto_max, max_lin, inter=1.28):
+    tam = tam_max
+    while tam >= tam_min:
+        f = fuente(peso, tam)
+        lin = envolver(draw, texto, f, ancho)
+        if len(lin) <= max_lin and len(lin) * int(tam * inter) <= alto_max and max(draw.textlength(l, font=f) for l in lin) <= ancho:
+            return f, lin, int(tam * inter)
+        tam -= 2
+    f = fuente(peso, tam_min)
+    return f, envolver(draw, texto, f, ancho), int(tam_min * inter)
+
+def monograma(draw, x, y, d, marca, fondo, tinta):
+    draw.ellipse((x, y, x + d, y + d), fill=fondo)
+    ini = ''.join(p[0] for p in marca.split()[:2]).upper()
+    draw.text((x + d / 2, y + d / 2 + 1), ini, font=fuente('xb', int(d * 0.42)), fill=tinta, anchor='mm')
+
+def anillo(img, cx, cy, d, valor, color, pista=(255, 255, 255, 34), grosor=34):
+    s = 3
+    capa = Image.new('RGBA', (d * s, d * s), (0, 0, 0, 0))
+    g = ImageDraw.Draw(capa)
+    box = (grosor * s // 2, grosor * s // 2, d * s - grosor * s // 2, d * s - grosor * s // 2)
+    g.arc(box, 0, 360, fill=pista, width=grosor * s)
+    fin = -90 + 3.6 * max(1, min(100, valor))
+    g.arc(box, -90, fin, fill=color + (255,), width=grosor * s)
+    r = (d * s - grosor * s) / 2
+    for ang in (-90, fin):
+        px = d * s / 2 + r * math.cos(math.radians(ang))
+        py = d * s / 2 + r * math.sin(math.radians(ang))
+        g.ellipse((px - grosor * s / 2, py - grosor * s / 2, px + grosor * s / 2, py + grosor * s / 2), fill=color + (255,))
+    capa = capa.resize((d, d), Image.LANCZOS)
+    img.paste(capa, (cx - d // 2, cy - d // 2), capa)
+
+MARGEN = 96
+ANCHO = W - 2 * MARGEN
+
+def render_pro(job, out_path):
+    texto = ' '.join(str(job['texto']).split())
+    ref = ' '.join(str(job.get('referencia', '') or '').split())
+    cifra = ' '.join(str(job.get('cifra', '') or '').split())
+    etiqueta = ' '.join(str(job.get('etiqueta', '') or '').split()).upper()
+    tipo = job.get('tipo', 'dato')
+    paleta = str(job.get('paleta', 'dinero'))
+    marca = str(job.get('marca', 'Dinero con Historia'))
+    valor = job.get('valor')
+    semilla = str(job.get('job_id', texto))
+    rng = random.Random(sum(ord(c) * (i + 1) for i, c in enumerate(semilla)))
+    if paleta == 'dinero':
+        return render_dinero(job, out_path, texto, ref, cifra, etiqueta, tipo, marca, valor, rng)
+    return render_variado(job, out_path, texto, ref, cifra, etiqueta, tipo, marca, rng)
+
+def cabecera(draw, marca, etiqueta, fondo_mono, tinta_mono, color_marca, color_et, outline_et):
+    monograma(draw, MARGEN, 92, 64, marca, fondo_mono, tinta_mono)
+    draw.text((MARGEN + 84, 124), marca, font=fuente('sb', 31), fill=color_marca, anchor='lm')
+    if etiqueta:
+        f = fuente('b', 24)
+        w = int(sum(draw.textlength(c, font=f) + 4 for c in etiqueta)) + 52
+        x1 = W - MARGEN
+        draw.rounded_rectangle((x1 - w, 106, x1, 150), radius=22, outline=outline_et, width=2)
+        texto_espaciado(draw, (x1 - w + 26, 117), etiqueta, f, color_et, sp=4)
+
+def render_dinero(job, out_path, texto, ref, cifra, etiqueta, tipo, marca, valor, rng):
+    c1, c2 = rng.choice([((6, 14, 32), (13, 38, 74)), ((7, 18, 28), (10, 52, 66)), ((12, 12, 30), (36, 32, 84))])
+    ORO = (244, 195, 85)
+    VERDE = (74, 210, 150)
+    img = diagonal(c1, c2)
+    brillo(img, W - 60, 90, 460, ORO, 46)
+    brillo(img, 40, H - 120, 520, VERDE, 22)
+    # arco grande, sutil, fuera de cuadro
+    capa = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+    g = ImageDraw.Draw(capa)
+    g.ellipse((W - 520, H - 700, W + 380, H + 200), outline=ORO + (26,), width=3)
+    g.ellipse((W - 640, H - 820, W + 500, H + 320), outline=ORO + (14,), width=2)
+    img.paste(capa, (0, 0), capa)
+    img = grano(img, 0.03)
+    draw = ImageDraw.Draw(img, 'RGBA')
+    draw.rounded_rectangle((34, 34, W - 34, H - 34), radius=28, outline=ORO + (70,), width=2)
+    cabecera(draw, marca, etiqueta, ORO, (14, 22, 44), (236, 240, 248), ORO, ORO + (150,))
+    draw.line((MARGEN, 188, W - MARGEN, 188), fill=(255, 255, 255, 36), width=1)
+
+    y = 250
+    if tipo == 'mito':
+        fm, lm, pm = ajustar_pro(draw, texto, 'sb', 64, 38, ANCHO, 330, 5)
+        fr, lr, pr = ajustar_pro(draw, ref, 'b', 60, 36, ANCHO, 430, 8)
+        total = 58 + len(lm) * pm + 56 + 52 + len(lr) * pr
+        y = 190 + max(40, (1010 - total) // 2 - 10)
+        draw.text((MARGEN, y), 'MITO', font=fuente('b', 30), fill=(255, 125, 125))
+        yy = y + 58
+        for ln in lm:
+            draw.text((MARGEN, yy), ln, font=fm, fill=(226, 230, 240))
+            w = draw.textlength(ln, font=fm)
+            draw.line((MARGEN - 6, yy + pm * 0.5, MARGEN + w + 6, yy + pm * 0.5), fill=(255, 110, 110), width=6)
+            yy += pm
+        yy += 56
+        draw.rounded_rectangle((MARGEN, yy, MARGEN + 8, yy + 10 + 0), radius=4, fill=VERDE)
+        draw.text((MARGEN + 26, yy - 8), 'REALIDAD', font=fuente('b', 30), fill=VERDE)
+        yy += 52
+        for ln in lr:
+            draw.text((MARGEN, yy), ln, font=fr, fill=(255, 255, 255))
+            yy += pr
+    else:
+        if valor is not None:
+            d = 470
+            cy = y + 40 + d // 2
+            anillo(img, W // 2, cy, d, float(valor), ORO)
+            draw = ImageDraw.Draw(img, 'RGBA')
+            if cifra:
+                fc, lc, pc = ajustar_pro(draw, cifra, 'xb', 150, 70, 300, 200, 2, 1.0)
+                tot = len(lc) * pc
+                for i, ln in enumerate(lc):
+                    draw.text((W // 2, cy - tot // 2 + i * pc + pc // 2), ln, font=fc, fill=(255, 255, 255), anchor='mm')
+            y = cy + d // 2 + 64
+        elif cifra:
+            fc, lc, pc = ajustar_pro(draw, cifra, 'xb', 270, 96, ANCHO, 460, 2, 1.04)
+            for i, ln in enumerate(lc):
+                draw.text((MARGEN, y + i * pc), ln, font=fc, fill=ORO)
+            y += len(lc) * pc + 18
+            draw.rounded_rectangle((MARGEN, y, MARGEN + 120, y + 8), radius=4, fill=ORO)
+            y += 48
+        if tipo == 'frase':
+            draw.text((MARGEN - 6, y - 40), '“', font=fuente('xb', 210), fill=ORO + (200,))
+            y += 120
+        disp = 1060 - y - (150 if ref else 0)
+        ft, lt, pt = ajustar_pro(draw, texto, 'sb', 76 if not cifra and valor is None else 56, 36, ANCHO, max(disp, 260), 10)
+        if not cifra and valor is None and tipo != 'frase':
+            # texto principal sin cifra: centrar verticalmente en el area libre
+            alto = len(lt) * pt + (80 if ref else 0)
+            y = 190 + max(70, (1010 - alto) // 2 - 10)
+            draw.rounded_rectangle((MARGEN, y - 56, MARGEN + 120, y - 48), radius=4, fill=ORO)
+        for ln in lt:
+            draw.text((MARGEN, y), ln, font=ft, fill=(255, 255, 255))
+            y += pt
+        if ref:
+            y += 26
+            draw.line((MARGEN, y, MARGEN + 56, y), fill=ORO, width=4)
+            fr = fuente('m', 30)
+            for ln in envolver(draw, ref, fr, ANCHO):
+                y += 18
+                draw.text((MARGEN, y), ln, font=fr, fill=(184, 196, 216))
+                y += 36
+    pie = 'Contenido educativo · No es asesoría financiera'
+    draw.line((MARGEN, H - 150, W - MARGEN, H - 150), fill=(255, 255, 255, 36), width=1)
+    draw.text((MARGEN, H - 104), pie, font=fuente('m', 27), fill=(150, 164, 188), anchor='lm')
+    img.convert('RGB').save(out_path, 'JPEG', quality=93, optimize=True)
+    print('Tarjeta lista:', out_path)
+
+def render_variado(job, out_path, texto, ref, cifra, etiqueta, tipo, marca, rng):
+    CREMA = (245, 240, 231)
+    TINTA = (22, 26, 46)
+    GRIS = (110, 112, 128)
+    acento = rng.choice([(232, 72, 60), (0, 122, 128), (84, 72, 188), (28, 96, 196), (24, 136, 88), (214, 110, 20)])
+    img = Image.new('RGB', (W, H), CREMA)
+    img = grano(img, 0.025)
+    draw = ImageDraw.Draw(img, 'RGBA')
+    cabecera(draw, marca, etiqueta, TINTA, CREMA, TINTA, acento, acento + (255,))
+    y = 224
+    if tipo == 'mito':
+        h1 = 330
+        draw.rounded_rectangle((MARGEN, y, W - MARGEN, y + h1), radius=44, fill=(48, 50, 70))
+        draw.text((MARGEN + 44, y + 38), 'MITO', font=fuente('b', 28), fill=(255, 150, 140))
+        fm, lm, pm = ajustar_pro(draw, texto, 'sb', 60, 36, ANCHO - 88, h1 - 130, 4)
+        yy = y + 96
+        for ln in lm:
+            draw.text((MARGEN + 44, yy), ln, font=fm, fill=(236, 236, 244))
+            w = draw.textlength(ln, font=fm)
+            draw.line((MARGEN + 40, yy + pm * 0.5, MARGEN + 48 + w, yy + pm * 0.5), fill=(255, 130, 120), width=5)
+            yy += pm
+        y += h1 + 28
+        fr, lr, pr = ajustar_pro(draw, ref, 'sb', 58, 34, ANCHO - 88, 430, 8)
+        h2 = max(300, 96 + len(lr) * pr + 56)
+        draw.rounded_rectangle((MARGEN, y, W - MARGEN, y + h2), radius=44, fill=acento)
+        draw.text((MARGEN + 44, y + 38), 'REALIDAD', font=fuente('b', 28), fill=(255, 255, 255, 200))
+        yy = y + 96
+        for ln in lr:
+            draw.text((MARGEN + 44, yy), ln, font=fr, fill=(255, 255, 255))
+            yy += pr
+    elif cifra:
+        h = 470
+        draw.rounded_rectangle((MARGEN, y, W - MARGEN, y + h), radius=44, fill=acento)
+        # forma decorativa clara dentro del bloque
+        capa = Image.new('RGBA', (W, H), (0, 0, 0, 0))
+        g = ImageDraw.Draw(capa)
+        g.ellipse((W - MARGEN - 360, y - 120, W - MARGEN + 120, y + 360), fill=(255, 255, 255, 26))
+        mask = Image.new('L', (W, H), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((MARGEN, y, W - MARGEN, y + h), radius=44, fill=255)
+        img.paste(capa, (0, 0), Image.composite(capa.split()[3], Image.new('L', (W, H), 0), mask))
+        draw = ImageDraw.Draw(img, 'RGBA')
+        fc, lc, pc = ajustar_pro(draw, cifra, 'xb', 230, 90, ANCHO - 130, h - 90, 2, 1.0)
+        tot = len(lc) * pc
+        yy = y + h - 44 - tot
+        for ln in lc:
+            draw.text((MARGEN + 44, yy), ln, font=fc, fill=(255, 255, 255))
+            yy += pc
+        y += h + 56
+        ft, lt, pt = ajustar_pro(draw, texto, 'sb', 58, 36, ANCHO, 1000 - y - (110 if ref else 0), 8)
+        for ln in lt:
+            draw.text((MARGEN, y), ln, font=ft, fill=TINTA)
+            y += pt
+        if ref:
+            y += 20
+            draw.text((MARGEN, y), ref, font=fuente('m', 29), fill=GRIS)
+    else:
+        h = 780
+        draw.rounded_rectangle((MARGEN, y, W - MARGEN, y + h), radius=44, fill=acento)
+        if tipo in ('pregunta', 'frase'):
+            glifo = '?' if tipo == 'pregunta' else '“'
+            draw.text((MARGEN + 46, y + (30 if tipo == 'pregunta' else 70)), glifo, font=fuente('xb', 220), fill=(255, 255, 255, 90))
+        else:
+            draw.rounded_rectangle((MARGEN + 50, y + 64, MARGEN + 50 + 96, y + 72), radius=4, fill=(255, 255, 255, 150))
+            texto_espaciado(draw, (MARGEN + 50, y + 96), 'SABÍAS QUE', fuente('b', 28), (255, 255, 255, 200), sp=5)
+        ft, lt, pt = ajustar_pro(draw, texto, 'xb', 74, 40, ANCHO - 100, h - 330, 9, 1.22)
+        tot = len(lt) * pt
+        yy = y + 250 + (h - 250 - 50 - tot) // 2
+        for ln in lt:
+            draw.text((MARGEN + 50, yy), ln, font=ft, fill=(255, 255, 255))
+            yy += pt
+        y += h + 40
+        if ref:
+            fr = fuente('m', 30)
+            for ln in envolver(draw, ref, fr, ANCHO)[:2]:
+                draw.text((MARGEN, y), ln, font=fr, fill=GRIS)
+                y += 40
+    draw.line((MARGEN, H - 150, W - MARGEN, H - 150), fill=TINTA + (40,), width=1)
+    draw.text((MARGEN, H - 104), 'Datos y curiosidades', font=fuente('m', 27), fill=GRIS, anchor='lm')
+    draw.text((W - MARGEN, H - 104), '@' + ''.join(marca.split()).lower(), font=fuente('sb', 27), fill=TINTA, anchor='rm')
+    img.convert('RGB').save(out_path, 'JPEG', quality=93, optimize=True)
+    print('Tarjeta lista:', out_path)
+
+def main():
+    job_path, out_path = sys.argv[1], sys.argv[2]
+    with open(job_path, encoding='utf-8') as f:
+        job = json.load(f)
+    if job.get('imagen_b64') or str(job.get('paleta', 'fe')) == 'fe':
+        render_clasico(job, out_path)
+    else:
+        render_pro(job, out_path)
 
 if __name__ == '__main__':
     main()
