@@ -189,7 +189,7 @@ def main():
     velocidad = float(job.get('velocidad', 1.0))
 
     # 1) linea de tiempo de la voz con pausas
-    humanizar = bool(job.get('humanizar', job.get('tipo') in ('oracion', 'salmo')))
+    humanizar = bool(job.get('humanizar', False))  # sonido limpio por defecto (decision de Ferlyn 14 oct)
     rng = np.random.default_rng(zlib.crc32(str(job.get('job_id', 'fe')).encode()))
     partes = [np.zeros(int(LEAD * SR), dtype=np.float32)]
     t = LEAD
