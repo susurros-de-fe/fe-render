@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Instalar Pillow y fuentes
-        run: sudo apt-get update -y && sudo apt-get install -y python3-pil fonts-dejavu-core
+        run: sudo apt-get update -y && sudo apt-get install -y python3-pil fonts-dejavu-core fonts-inter
       - name: Renderizar tarjeta
         run: |
           python3 render_tarjeta.py "jobs/${JOB_ID}/job.json" "tarjeta-${JOB_ID}.jpg"
