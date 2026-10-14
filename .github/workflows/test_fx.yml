@@ -1,0 +1,27 @@
+name: FE prueba efectos
+on: workflow_dispatch
+jobs:
+  prueba:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar ffmpeg, fuentes y numpy
+        run: sudo apt-get update -y && sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-inter python3-numpy python3-pil python3-fonttools
+      - name: Fuente de subtitulos (Barlow Condensed)
+        run: |
+          mkdir -p ~/.fonts
+          curl -fsSL --retry 3 -o ~/.fonts/BarlowCondensed-Bold.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/barlowcondensed/BarlowCondensed-Bold.ttf" || echo "sin Barlow"
+          curl -fsSL --retry 3 -o ~/.fonts/BarlowCondensed-SemiBold.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/barlowcondensed/BarlowCondensed-SemiBold.ttf" || echo "sin Barlow SemiBold"
+          fc-cache -f || true
+      - name: Crear job de prueba (sin Cloudflare)
+        run: python3 mkjob_test.py
+      - name: Renderizar con efectos pro
+        run: |
+          set -o pipefail
+          /usr/bin/time -v python3 render_fe_pro.py job.json prueba.mp4 2>&1 | tee log.txt
+          if grep -q "AVISO" log.txt; then echo "ERROR: los efectos fallaron y se uso el respaldo"; exit 1; fi
+      - name: Medir resultado
+        run: |
+          ffprobe -v error -show_entries stream=codec_type,width,height,duration -of compact prueba.mp4
+          ffmpeg -hide_banner -i prueba.mp4 -af ebur128=peak=true -f null - 2>&1 | grep -E "I:|Peak" | tail -3
