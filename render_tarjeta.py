@@ -674,7 +674,12 @@ def main():
     elif str(job.get('paleta', 'fe')) == 'fe':
         render_fe_pro(job, out_path)
     else:
-        render_pro(job, out_path)
+        try:
+            import tarjeta_pro3
+            tarjeta_pro3.render(job, out_path)
+        except Exception as e:
+            print('pro3 fallo, uso el diseno anterior:', repr(e))
+            render_pro(job, out_path)
 
 if __name__ == '__main__':
     main()
