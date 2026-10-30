@@ -1,0 +1,24 @@
+name: comprimir-telegram
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        required: true
+permissions:
+  contents: write
+jobs:
+  comprimir:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          sudo apt-get -qq update && sudo apt-get -qq -y install ffmpeg
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p 'video-*.mp4' -O in.mp4
+          D=$(ffprobe -v error -show_entries format=duration -of csv=p=0 in.mp4)
+          V=$(python3 -c "print(int(46*8000/$D-96))")
+          S=$(python3 -c "print(round($D))")
+          ffmpeg -y -loglevel error -i in.mp4 -vf scale=720:-2 -c:v libx264 -preset veryfast -b:v ${V}k -maxrate ${V}k -bufsize $((V*2))k -c:a aac -b:a 96k -movflags +faststart "tg-${S}s.mp4"
+          gh release upload "$TAG" "tg-${S}s.mp4" -R "$GITHUB_REPOSITORY" --clobber
