@@ -1,6 +1,6 @@
 import React from 'react';
 import {AbsoluteFill, Composition} from 'remotion';
-import {DUR} from './kit';
+import {DUR, Subtitulos} from './kit';
 import * as E from './Escena';
 
 const FPS = 30;
@@ -9,6 +9,7 @@ const FPS = 30;
 const Video: React.FC = () => (
   <AbsoluteFill style={{backgroundColor: '#0b1020', overflow: 'hidden'}}>
     <E.Escena />
+    <Subtitulos arriba={230} size={58} acento="#FFC83D" />
   </AbsoluteFill>
 );
 
