@@ -260,10 +260,12 @@ def main():
 
     # 2) imagen: FE V2 dibuja con Remotion si el job trae remotion_tsx; si falla o no hay imagenes, fondo de luz
     video_rm = None
+    rm_ok = False
     if job.get('remotion_tsx'):
         try:
             import render_fe_rm as RMF
             video_rm = RMF.render(job, escenas, tiempos, total, work, FPS)
+            rm_ok = True
         except Exception as ex:
             print('AVISO: Remotion de FE fallo (%r); se usa el respaldo.' % (ex,), flush=True)
             video_rm = None
@@ -388,8 +390,9 @@ def main():
             bus = '%s/bus.wav' % work
             luz = '%s/luz.mp4' % work
             FX.capa_luz(luz, pal['luz'], intensidad=1.0)
-            sello = '%s/sello.png' % work
-            FX.sello_png(sello, pal['nombre'], pal['sello'])
+            sello = None if rm_ok else '%s/sello.png' % work
+            if sello:
+                FX.sello_png(sello, pal['nombre'], pal['sello'])
         except Exception as ex:  # el video nunca debe fallar por un efecto: se renderiza sin esa parte
             print('AVISO: efectos pro desactivados por error:', repr(ex), flush=True)
             luz = sello = None
@@ -412,9 +415,9 @@ def main():
         vg = FX.filtro_acabado('0:v', ('%d:v' % idx_luz) if idx_luz is not None else None,
                                ('%d:v' % idx_sello) if idx_sello is not None else None, 'acab',
                                luz_opacidad=0.26, grano=6, vineta=True, fade_fin=max(total - 2.2, 1.0))
-        vg += ';[acab]ass=%s[vv]' % ass
+        vg += ';[acab]null[vv]' if rm_ok else ';[acab]ass=%s[vv]' % ass
     else:
-        vg = '[0:v]ass=%s[vv]' % ass
+        vg = '[0:v]null[vv]' if rm_ok else '[0:v]ass=%s[vv]' % ass
     if bus:
         ag = ('[2:a]aformat=channel_layouts=stereo,volume=%.2f,afade=t=in:d=1.0,'
               'afade=t=out:st=%.2f:d=2.2[m];'
