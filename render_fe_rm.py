@@ -19,11 +19,12 @@ def palabras(escenas, tiempos, total):
             continue
         tot = sum(len(w) + 1 for w in ws)
         d = max(fin - ini, 0.2)
+        claves = {max(range(i, min(i + 3, len(ws))), key=lambda n: len(ws[n])) for i in range(0, len(ws), 3)}
         t = ini
         primera = True
-        for w in ws:
+        for n, w in enumerate(ws):
             dd = d * (len(w) + 1) / tot
-            out.append({'w': w, 't': round(t, 3), 'd': round(dd, 3), 'f': primera})
+            out.append({'w': w, 't': round(t, 3), 'd': round(dd, 3), 'f': primera, 'k': n in claves})
             primera = bool(re.search(r'[.!?]$', w))
             t += dd
     return {'dur': round(total, 3), 'words': out}
