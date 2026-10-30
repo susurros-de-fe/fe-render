@@ -10,18 +10,27 @@ permissions:
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     env:
       JOB_ID: ${{ inputs.job_id }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: remotion/package-lock.json
       - name: Instalar ffmpeg, fuentes y numpy
         run: sudo apt-get update -y && sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-inter python3-numpy python3-pil python3-fonttools
       - name: Fuente de subtitulos (Barlow Condensed)
         run: |
           mkdir -p ~/.fonts
           curl -fsSL --retry 3 -o ~/.fonts/BarlowCondensed-Bold.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/barlowcondensed/BarlowCondensed-Bold.ttf" || echo "No se pudo bajar Barlow Condensed; se usara Inter Bold"
+          curl -sL -o ~/.fonts/Poppins-Bold.ttf https://raw.githubusercontent.com/google/fonts/main/ofl/poppins/Poppins-Bold.ttf || true
+          curl -sL -o ~/.fonts/Poppins-Medium.ttf https://raw.githubusercontent.com/google/fonts/main/ofl/poppins/Poppins-Medium.ttf || true
+          curl -sL -o ~/.fonts/Poppins-SemiBold.ttf https://raw.githubusercontent.com/google/fonts/main/ofl/poppins/Poppins-SemiBold.ttf || true
+          curl -sL -o ~/.fonts/PatrickHand-Regular.ttf https://raw.githubusercontent.com/google/fonts/main/ofl/patrickhand/PatrickHand-Regular.ttf || true
           fc-cache -f || true
           fc-list | grep -i "barlow" || true
       - name: Renderizar video
