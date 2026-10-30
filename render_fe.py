@@ -196,7 +196,7 @@ def main():
     work = 'work_render'
     os.makedirs(work, exist_ok=True)
     escenas = job['escenas']
-    imagenes = job['imagenes']
+    imagenes = job.get('imagenes') or []
     velocidad = float(job.get('velocidad', 1.0))
 
     # 1) linea de tiempo de la voz con pausas
@@ -258,9 +258,21 @@ def main():
          'loudnorm=I=-16:TP=-1.5:LRA=7,aresample=44100', '%s/voz_f.wav' % work])
     total = duration('%s/voz_f.wav' % work)
 
-    # 2) tomas: escenas consecutivas con la misma imagen
+    # 2) imagen: FE V2 dibuja con Remotion si el job trae remotion_tsx; si falla o no hay imagenes, fondo de luz
+    video_rm = None
+    if job.get('remotion_tsx'):
+        try:
+            import render_fe_rm as RMF
+            video_rm = RMF.render(job, escenas, tiempos, total, work, FPS)
+        except Exception as ex:
+            print('AVISO: Remotion de FE fallo (%r); se usa el respaldo.' % (ex,), flush=True)
+            video_rm = None
+    if video_rm is None and not imagenes:
+        import render_fe_rm as RMF
+        video_rm = RMF.respaldo(total, work, FPS)
+    # tomas: escenas consecutivas con la misma imagen (solo motor de fotos)
     tomas = []
-    for i, e in enumerate(escenas):
+    for i, e in enumerate([] if video_rm else escenas):
         img = int(e.get('img', 0))
         if tomas and tomas[-1]['img'] == img:
             tomas[-1]['fin_idx'] = i
@@ -318,8 +330,10 @@ def main():
              '-r', str(FPS), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', clip])
         clips.append(clip)
         durs.append(d)
-    video = '%s/joined_v.mp4' % work
-    if OV > 0.0:
+    video = video_rm or '%s/joined_v.mp4' % work
+    if video_rm:
+        pass
+    elif OV > 0.0:
         cmd = ['ffmpeg', '-y', '-loglevel', 'error']
         for c in clips:
             cmd += ['-i', c]
