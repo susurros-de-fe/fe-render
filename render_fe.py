@@ -56,6 +56,90 @@ def leer_voz(b64, work, i, velocidad, calida=False):
     return np.frombuffer(datos, dtype='<i2').astype(np.float32) / 32768.0
 
 
+# Voz Gemini (13-nov): Achernar, el rezo entero en UNA toma y se corta por escenas en los silencios.
+# Si no hay clave o falla (429), devuelve None y se usa la voz Cloudflare de cada escena, como siempre.
+G_MODELOS = ['gemini-3.8-flash-tts', 'gemini-3.1-flash-tts-preview', 'gemini-3.8-flash-lite-tts']
+G_ESTILO = 'Mujer que ora de verdad, voz cálida, baja y pausada, con emoción contenida.'
+G_ESTILO_HISTORIA = 'Mujer que cuenta una historia de fe, voz cálida, cercana y pausada, con emoción contenida.'
+
+
+def _gemini(texto, voz_g, estilo, wav):
+    import urllib.request
+    clave = os.environ.get('GEMINI_API_KEY', '')
+    if not clave:
+        return False
+    for m in G_MODELOS:
+        body = {'model': m, 'input': [{'type': 'user_input', 'content': [{'type': 'text', 'text': texto,
+                'annotations': [{'type': 'speech_metadata', 'style': estilo}]}]}],
+                'response_format': {'type': 'audio'}, 'generation_config': {'speech_config': [{'voice': voz_g}]}}
+        req = urllib.request.Request('https://generativelanguage.googleapis.com/v1beta/interactions',
+                                     data=json.dumps(body).encode('utf-8'), method='POST',
+                                     headers={'x-goog-api-key': clave, 'Content-Type': 'application/json'})
+        try:
+            r = json.load(urllib.request.urlopen(req, timeout=180))
+            data = next(c['data'] for s in r.get('steps', []) for c in (s.get('content') or []) if c.get('data'))
+            raw = base64.b64decode(data)
+            if raw[:4] != b'RIFF':
+                with wave.open(wav, 'wb') as w:
+                    w.setnchannels(1)
+                    w.setsampwidth(2)
+                    w.setframerate(24000)
+                    w.writeframes(raw)
+            else:
+                with open(wav, 'wb') as f:
+                    f.write(raw)
+            print('voz gemini con', m, flush=True)
+            return True
+        except Exception as e:
+            print('voz gemini', m, 'fallo:', str(e)[:120], flush=True)
+    return False
+
+
+def voz_gemini(escenas, job, work):
+    import re
+    if str(job.get('voz_gemini', 'Achernar')).lower() in ('no', 'ninguna', ''):
+        return None
+    historia = job.get('tipo') == 'historia'
+    crudo = '%s/g_crudo.wav' % work
+    if not _gemini(' '.join(str(e.get('texto', '')).strip() for e in escenas), job.get('voz_gemini', 'Achernar'),
+                   job.get('estilo_voz', G_ESTILO_HISTORIA if historia else G_ESTILO), crudo):
+        return None
+    limpio = '%s/g.wav' % work
+    run(['ffmpeg', '-y', '-v', 'error', '-i', crudo, '-ar', str(SR), '-ac', '1', '-af',
+         'silenceremove=start_periods=1:start_threshold=-42dB,areverse,'
+         'silenceremove=start_periods=1:start_threshold=-42dB,areverse', limpio])
+    total = duration(limpio)
+    p = subprocess.run(['ffmpeg', '-v', 'info', '-i', limpio, '-af', 'silencedetect=n=-38dB:d=0.12', '-f', 'null', '-'],
+                       capture_output=True, text=True)
+    ini = [float(x) for x in re.findall(r'silence_start: ([\d.]+)', p.stderr)]
+    fin = [float(x) for x in re.findall(r'silence_end: ([\d.]+)', p.stderr)]
+    sil = [(a, b) for a, b in zip(ini, fin)]
+    largos = [max(len(str(e.get('texto', ''))), 1) for e in escenas]
+    cortes, acum, prev = [0.0], 0, 0.0
+    for L in largos[:-1]:
+        acum += L
+        est = total * acum / sum(largos)
+        cand = [s for s in sil if (s[0] + s[1]) / 2 > prev + 0.4 and abs((s[0] + s[1]) / 2 - est) < 3.0]
+        # el hueco largo cerca de lo esperado gana: es donde la voz cierra una frase
+        c = min(cand, key=lambda s: abs((s[0] + s[1]) / 2 - est) - 1.5 * (s[1] - s[0])) if cand else None
+        corte = (c[0] + c[1]) / 2 if c else est
+        cortes.append(max(corte, prev + 0.4))
+        prev = cortes[-1]
+    cortes.append(total)
+    filtro = ('silenceremove=start_periods=1:start_duration=0:start_threshold=-48dB,'
+              'areverse,silenceremove=start_periods=1:start_duration=0:start_threshold=-48dB,areverse')
+    out = []
+    for i in range(len(escenas)):
+        a, b = cortes[i], cortes[i + 1]
+        datos = subprocess.check_output(['ffmpeg', '-v', 'error', '-ss', '%.3f' % a, '-t', '%.3f' % max(b - a, 0.2),
+                                         '-i', limpio, '-af', filtro, '-f', 's16le', '-ar', str(SR), '-ac', '1', '-'])
+        out.append(np.frombuffer(datos, dtype='<i2').astype(np.float32) / 32768.0)
+    if any(len(v) < int(0.3 * SR) for v in out):
+        print('voz gemini: un corte salio vacio, se usa Cloudflare', flush=True)
+        return None
+    return out
+
+
 def _db_frames(x, hop=441):
     n = len(x) // hop
     if n == 0:
@@ -208,8 +292,9 @@ def main():
     tiempos = []
     pausa_prev = LEAD
     informe = []
+    gv = voz_gemini(escenas, job, work)
     for i, e in enumerate(escenas):
-        v = leer_voz(e['audio_b64'], work, i, velocidad, calida=humanizar)
+        v = gv[i] if gv else leer_voz(e['audio_b64'], work, i, velocidad, calida=humanizar)
         if audio_v >= 2:
             v, cortes = reparar_pausas(v)
             for (seg, antes, despues) in cortes:
