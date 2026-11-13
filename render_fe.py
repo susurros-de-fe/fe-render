@@ -20,7 +20,6 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import subs_pro as S  # noqa: E402
-S.set_paleta('fe')  # recuadro dorado suave (paz) en vez de rojo
 
 W, H, FPS, SR = 1080, 1920, 30, 44100
 NL = chr(10)
@@ -57,7 +56,7 @@ def leer_voz(b64, work, i, velocidad, calida=False):
 
 
 # Voz Gemini (13-nov): Achernar, el rezo entero en UNA toma y se corta por escenas en los silencios.
-# Si no hay clave o falla (429), devuelve None y se usa la voz Cloudflare de cada escena, como siempre.
+# Si no hay clave o falla (429), el render FALLA (nunca voz Cloudflare, 13-nov) y la revisión lo repite.
 G_MODELOS = ['gemini-3.8-flash-tts', 'gemini-3.1-flash-tts-preview', 'gemini-3.8-flash-lite-tts']
 G_ESTILO = 'Mujer que ora de verdad, voz cálida, baja y pausada, con emoción contenida.'
 G_ESTILO_HISTORIA = 'Mujer que cuenta una historia de fe, voz cálida, cercana y pausada, con emoción contenida.'
@@ -103,7 +102,8 @@ def voz_gemini(escenas, job, work):
     crudo = '%s/g_crudo.wav' % work
     if not _gemini(' '.join(str(e.get('texto', '')).strip() for e in escenas), job.get('voz_gemini', 'Achernar'),
                    job.get('estilo_voz', G_ESTILO_HISTORIA if historia else G_ESTILO), crudo):
-        return None
+        # Ferlyn 13-nov: FE nunca sale con la voz vieja. Sin clave o sin cuota, el render falla y la revisión lo repite.
+        raise RuntimeError('voz Achernar no disponible (falta GEMINI_API_KEY en render.yml o se acabó la cuota)')
     limpio = '%s/g.wav' % work
     run(['ffmpeg', '-y', '-v', 'error', '-i', crudo, '-ar', str(SR), '-ac', '1', '-af',
          'silenceremove=start_periods=1:start_threshold=-42dB,areverse,'
@@ -135,8 +135,7 @@ def voz_gemini(escenas, job, work):
                                          '-i', limpio, '-af', filtro, '-f', 's16le', '-ar', str(SR), '-ac', '1', '-'])
         out.append(np.frombuffer(datos, dtype='<i2').astype(np.float32) / 32768.0)
     if any(len(v) < int(0.3 * SR) for v in out):
-        print('voz gemini: un corte salio vacio, se usa Cloudflare', flush=True)
-        return None
+        raise RuntimeError('voz gemini: un corte salio vacio; se repite el render (nunca voz Cloudflare)')
     return out
 
 
@@ -280,7 +279,7 @@ def main():
     work = 'work_render'
     os.makedirs(work, exist_ok=True)
     escenas = job['escenas']
-    imagenes = job.get('imagenes') or []
+    imagenes = job['imagenes']
     velocidad = float(job.get('velocidad', 1.0))
 
     # 1) linea de tiempo de la voz con pausas
@@ -343,23 +342,9 @@ def main():
          'loudnorm=I=-16:TP=-1.5:LRA=7,aresample=44100', '%s/voz_f.wav' % work])
     total = duration('%s/voz_f.wav' % work)
 
-    # 2) imagen: FE V2 dibuja con Remotion si el job trae remotion_tsx; si falla o no hay imagenes, fondo de luz
-    video_rm = None
-    rm_ok = False
-    if job.get('remotion_tsx'):
-        try:
-            import render_fe_rm as RMF
-            video_rm = RMF.render(job, escenas, tiempos, total, work, FPS)
-            rm_ok = True
-        except Exception as ex:
-            print('AVISO: Remotion de FE fallo (%r); se usa el respaldo.' % (ex,), flush=True)
-            video_rm = None
-    if video_rm is None and not imagenes:
-        import render_fe_rm as RMF
-        video_rm = RMF.respaldo(total, work, FPS)
-    # tomas: escenas consecutivas con la misma imagen (solo motor de fotos)
+    # 2) tomas: escenas consecutivas con la misma imagen
     tomas = []
-    for i, e in enumerate([] if video_rm else escenas):
+    for i, e in enumerate(escenas):
         img = int(e.get('img', 0))
         if tomas and tomas[-1]['img'] == img:
             tomas[-1]['fin_idx'] = i
@@ -370,161 +355,63 @@ def main():
     for k, tm in enumerate(tomas):
         tm['fin'] = total if k == len(tomas) - 1 else tomas[k + 1]['ini']
 
-    usar_fx = bool(int(job.get('fx', 1))) and os.environ.get('FX_OFF') != '1'
-    OV = 0.8 if (usar_fx and len(tomas) > 1) else 0.0     # solape entre tomas: disolvencia suave
-    FADE_FIN = 1.4
     clips = []
-    durs = []
     for k, tm in enumerate(tomas):
-        ini = 0.0 if k == 0 else tm['ini'] - OV / 2.0
-        fin = total if k == len(tomas) - 1 else tm['fin'] + OV / 2.0
-        d = fin - ini
+        d = tm['fin'] - tm['ini']
         path = '%s/i%02d.jpg' % (work, k)
         with open(path, 'wb') as f:
             f.write(base64.b64decode(imagenes[tm['img']]))
         frames = max(int(d * FPS), 1)
-        if usar_fx:
-            # camara: acercamiento o alejamiento lento con un leve desplazamiento lateral
-            sgn = 1 if k % 2 == 0 else -1
-            if sgn > 0:
-                z = '1.07+0.10*on/%d' % frames
-            else:
-                z = '1.17-0.10*on/%d' % frames
-            xx = "iw/2-iw/zoom/2+(on/%d-0.5)*iw*0.022*%d" % (frames, sgn)
-            yy = "ih/2-ih/zoom/2+(0.5-on/%d)*ih*0.010" % frames
+        if k % 2 == 0:
+            z = '1+0.09*on/%d' % frames
         else:
-            z = '1+0.09*on/%d' % frames if k % 2 == 0 else '1.09-0.09*on/%d' % frames
-            xx = 'iw/2-iw/zoom/2'
-            yy = 'ih/2-ih/zoom/2'
-        if usar_fx:
-            fades = []
-            if k == 0:
-                fades.append('fade=t=in:st=0:d=%.2f' % FADE)
-            if k == len(tomas) - 1:
-                fades.append('fade=t=out:st=%.2f:d=%.2f' % (max(d - FADE_FIN, 0.0), FADE_FIN))
-            if OV == 0.0 and k > 0:
-                fades.append('fade=t=in:st=0:d=%.2f' % FADE)
-            if OV == 0.0 and k < len(tomas) - 1:
-                fades.append('fade=t=out:st=%.2f:d=%.2f' % (max(d - FADE, 0.0), FADE))
-            fx_f = (',' + ','.join(fades)) if fades else ''
-        else:
-            fx_f = ',fade=t=in:st=0:d=%.2f,fade=t=out:st=%.2f:d=%.2f' % (FADE, max(d - FADE, 0.0), FADE)
+            z = '1.09-0.09*on/%d' % frames
+        f_out = max(d - FADE, 0.0)
         vf = ("crop='min(iw,ih*9/16)':ih,scale=2160:-2:flags=lanczos,"
-              "zoompan=z='%s':x='%s':y='%s':d=%d:s=%dx%d:fps=%d%s,format=yuv420p"
-              ) % (z, xx, yy, frames, W, H, FPS, fx_f)
+              "zoompan=z='%s':x='iw/2-iw/zoom/2':y='ih/2-ih/zoom/2':d=%d:s=%dx%d:fps=%d,"
+              "fade=t=in:st=0:d=%.2f,fade=t=out:st=%.2f:d=%.2f,format=yuv420p"
+              ) % (z, frames, W, H, FPS, FADE, f_out, FADE)
         clip = '%s/c%02d.mp4' % (work, k)
         run(['ffmpeg', '-y', '-loglevel', 'error', '-i', path, '-vf', vf, '-an', '-t', '%.3f' % d,
-             '-r', str(FPS), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', clip])
+             '-r', str(FPS), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', clip])
         clips.append(clip)
-        durs.append(d)
-    video = video_rm or '%s/joined_v.mp4' % work
-    if video_rm:
-        pass
-    elif OV > 0.0:
-        cmd = ['ffmpeg', '-y', '-loglevel', 'error']
+    lst = '%s/list.txt' % work
+    with open(lst, 'w') as f:
         for c in clips:
-            cmd += ['-i', c]
-        g, cur, acc = '', '0:v', durs[0]
-        for j in range(1, len(clips)):
-            etiqueta = 'x%d' % j
-            g += '[%s][%d:v]xfade=transition=fade:duration=%.2f:offset=%.3f[%s];' % (cur, j, OV, acc - OV, etiqueta)
-            cur = etiqueta
-            acc += durs[j] - OV
-        run(cmd + ['-filter_complex', g.rstrip(';'), '-map', '[%s]' % cur, '-r', str(FPS), '-c:v', 'libx264',
-                   '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', video])
-    else:
-        lst = '%s/list.txt' % work
-        with open(lst, 'w') as f:
-            for c in clips:
-                f.write("file '%s'" % os.path.basename(c) + NL)
-        run(['ffmpeg', '-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', lst,
-             '-c', 'copy', video])
+            f.write("file '%s'" % os.path.basename(c) + NL)
+    video = '%s/joined_v.mp4' % work
+    run(['ffmpeg', '-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', lst,
+         '-c', 'copy', video])
 
     # 3) subtitulos modernos (modulo compartido)
     ass = '%s/subs.ass' % work
     gancho = S.limpiar(job.get('texto_gancho', '') or '')
     escribir_ass(ass, escenas, tiempos, gancho, min(3.5, tiempos[0][0] + 3.0))
 
-    # 4) fondo relajante + sonido de diseno (todo POR DEBAJO de la voz) + acabado de video
+    # 4) fondo relajante + mezcla final
     fondo = job.get('fondo', 'relajante')
-    bus = None
     if fondo == 'relajante':
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from relax import synth_relax
         synth_relax('%s/musica.wav' % work, total + 1.0)
-        bus = '%s/musica.wav' % work
-    luz = sello = None
-    if usar_fx:
-        try:
-            import fx_pro as FX
-            pal = FX.PALETAS['fe']
-            cortes = [tm['ini'] for tm in tomas[1:]]
-            sfx = FX.sfx_bus(total, cortes, pal['sfx'], nivel=float(job.get('sfx_nivel', 1.0)), fin=max(total - 2.6, 1.0))
-            if bus:
-                m = wave.open(bus, 'rb')
-                base = np.frombuffer(m.readframes(m.getnframes()), dtype='<i2').astype(np.float32) / 32768.0
-                canales = m.getnchannels()
-                m.close()
-                if canales == 2:
-                    base = base.reshape(-1, 2).mean(axis=1)
-                n = min(len(base), len(sfx))
-                base[:n] += sfx[:n] / max(float(job.get('fondo_nivel', 0.40)), 0.1) * 0.9
-                FX.escribir_wav('%s/bus.wav' % work, base)
-            else:
-                FX.escribir_wav('%s/bus.wav' % work, sfx)
-            bus = '%s/bus.wav' % work
-            luz = '%s/luz.mp4' % work
-            FX.capa_luz(luz, pal['luz'], intensidad=1.0)
-            sello = None if rm_ok else '%s/sello.png' % work
-            if sello:
-                FX.sello_png(sello, pal['nombre'], pal['sello'])
-        except Exception as ex:  # el video nunca debe fallar por un efecto: se renderiza sin esa parte
-            print('AVISO: efectos pro desactivados por error:', repr(ex), flush=True)
-            luz = sello = None
-    entradas = ['-i', video, '-i', '%s/voz_f.wav' % work]
-    n_in = 2
-    if bus:
-        entradas += ['-i', bus]
-        n_in += 1
-    idx_luz = idx_sello = None
-    if luz:
-        idx_luz = n_in
-        entradas += ['-stream_loop', '-1', '-i', luz]
-        n_in += 1
-    if sello:
-        idx_sello = n_in
-        entradas += ['-loop', '1', '-i', sello]
-        n_in += 1
-    if idx_luz is not None or idx_sello is not None:
-        import fx_pro as FX
-        vg = FX.filtro_acabado('0:v', ('%d:v' % idx_luz) if idx_luz is not None else None,
-                               ('%d:v' % idx_sello) if idx_sello is not None else None, 'acab',
-                               luz_opacidad=0.26, grano=6, vineta=True, fade_fin=max(total - 2.2, 1.0))
-        vg += ';[acab]null[vv]' if rm_ok else ';[acab]ass=%s[vv]' % ass
+        graph = (
+            '[2:a]aformat=channel_layouts=stereo,volume=%.2f,afade=t=in:d=1.5,'
+            'afade=t=out:st=%.2f:d=2.2[m];'
+            '[1:a]aresample=44100,aformat=channel_layouts=stereo,volume=1.15,asplit=2[v][sc];'
+            '[m][sc]sidechaincompress=threshold=0.015:ratio=4:attack=60:release=1200[md];'
+            '[v][md]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[out]'
+        ) % (float(job.get('fondo_nivel', 0.40)), max(total - 2.4, 0.0))
+        cmd = ['ffmpeg', '-y', '-loglevel', 'error', '-i', video, '-i', '%s/voz_f.wav' % work,
+               '-i', '%s/musica.wav' % work, '-filter_complex', graph + ';[0:v]ass=%s[vv]' % ass,
+               '-map', '[vv]', '-map', '[out]']
     else:
-        vg = '[0:v]null[vv]' if rm_ok else '[0:v]ass=%s[vv]' % ass
-    if bus:
-        ag = ('[2:a]aformat=channel_layouts=stereo,volume=%.2f,afade=t=in:d=1.0,'
-              'afade=t=out:st=%.2f:d=2.2[m];'
-              '[1:a]aresample=44100,aformat=channel_layouts=stereo,volume=1.15,asplit=2[v][sc];'
-              '[m][sc]sidechaincompress=threshold=0.012:ratio=6:attack=40:release=900[md];'
-              '[v][md]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[out]'
-              ) % (float(job.get('fondo_nivel', 0.40)), max(total - 2.4, 0.0))
-    else:
-        ag = '[1:a]aformat=channel_layouts=stereo[out]'
-    cmd = ['ffmpeg', '-y', '-loglevel', 'error'] + entradas + ['-filter_complex', vg + ';' + ag,
-                                                              '-map', '[vv]', '-map', '[out]']
+        cmd = ['ffmpeg', '-y', '-loglevel', 'error', '-i', video, '-i', '%s/voz_f.wav' % work,
+               '-filter_complex', '[0:v]ass=%s[vv];[1:a]aformat=channel_layouts=stereo[out]' % ass,
+               '-map', '[vv]', '-map', '[out]']
     run(cmd + ['-t', '%.2f' % total, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21',
                '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart', out_path])
     print('Duracion final: %.1f s' % duration(out_path))
 
 
 if __name__ == '__main__':
-    try:
-        main()
-    except Exception as ex:  # red de seguridad: si algo de los efectos falla, se renderiza como antes (sin efectos)
-        if os.environ.get('FX_OFF') == '1':
-            raise
-        print('AVISO: fallo con efectos pro (%r); se repite el render sin efectos.' % (ex,), flush=True)
-        os.environ['FX_OFF'] = '1'
-        main()
+    main()
