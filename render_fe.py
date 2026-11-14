@@ -355,6 +355,12 @@ def main():
     for k, tm in enumerate(tomas):
         tm['fin'] = total if k == len(tomas) - 1 else tomas[k + 1]['ini']
 
+    # 13-nov: si el job trae menos imagenes que las que piden las escenas (indices desde 1 o imagen perdida), se ajusta y el video no se pierde
+    if imagenes:
+        base = 1 if min(tm['img'] for tm in tomas) >= 1 and max(tm['img'] for tm in tomas) >= len(imagenes) else 0
+        for tm in tomas:
+            tm['img'] = (tm['img'] - base) % len(imagenes)
+
     clips = []
     for k, tm in enumerate(tomas):
         d = tm['fin'] - tm['ini']
